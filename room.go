@@ -24,11 +24,14 @@ var (
 // variable messages is a channel if strings for recieving messages
 
 func main() {
+	// registering a Listener on localhost
 	listener, err := net.Listen("tcp", "localhost:8080")
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	// in a goroutine we call broadcaster function
+	// goroutine definition
 	go broadcaster()
 	for {
 		conn, err := listener.Accept()
@@ -40,20 +43,28 @@ func main() {
 	}
 }
 
+// a function for send any messages to any client
 func broadcaster() {
-	clients := make(map[client]bool) // all connected clients
+	// a map of all connected clients to server now
+	clients := make(map[client]bool)
+	// an infinite loop which keeps server alive forever
 	for {
 		select {
+		// in this case ,if recieve a message , read it and send to all client in your map
 		case msg := <-messages:
-			// Broadcast incoming message to all
-			// clients' outgoing message channels.
+
+			// If we encounter a problem in sending a message to a client, it means that it receives the message slowly or the process of sending the message fails.
+			// All our code will be blocked and other clients will not receive any messages.
 			for cli := range clients {
 				cli <- msg // What if a reader fails or is slow?
 			}
 
+			// in this case we are waiting for a client for regisrering and check it and add to clients list.
+			// we should create a channel in this channel.
 		case cli := <-entering:
 			clients[cli] = true
 
+			// this case using for sign out a client
 		case cli := <-leaving:
 			delete(clients, cli)
 			close(cli)
