@@ -30,11 +30,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// in a goroutine we call broadcaster function
+	// in a goroutine we call broadcaster function, this function waits for clients to send messages.
 	// goroutine definition
 	go broadcaster()
+	// when main function call broadcaster function , waits in this infinite loop for connection
 	for {
+		// accepting connection done with listener.Accept
 		conn, err := listener.Accept()
+		// error handling says that if there is not error in this , connect connection to another function called handleConn by connection input.
 		if err != nil {
 			log.Print(err)
 			continue
