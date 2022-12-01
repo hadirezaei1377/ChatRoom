@@ -75,21 +75,33 @@ func broadcaster() {
 	}
 }
 
+// create a new channel for make connection between chatroom and a client and keep this connection
 func handleConn(conn net.Conn) {
 	ch := make(chan string) // outgoing client messages
+	// send this connection(between chatroom and a client) to another goroutine
+	// we said send by using lientWriter to client any data you received.
 	go clientWriter(conn, ch)
 
+	// who is client address (RemoteAddr)
 	who := conn.RemoteAddr().String()
+	// initial message for new client:
 	ch <- "Welcome to the room " + who // greetings to the client
+	// after joining client we add a message to message channels and say who joined to this chatroom
+	// in broadcast function there is a message that recieve messages and sen to all clients ... see code in broadcast function
 	messages <- who + " join the room"
+	// entering client as channel
 	entering <- ch
 
+	// from now on is waiting for sending a message from client
 	input := bufio.NewScanner(conn)
 	for input.Scan() {
 		messages <- who + ": " + input.Text()
 	}
-	// NOTE: ignoring potential errors from input.Err()
+	// in above loop we put those messages that client sends as message
 
+	// if client doesnt send any thing , enter leaving mode
+	// send to  channel
+	// leaving case is activated in broadcast function ... see it
 	leaving <- ch
 	messages <- who + " has left the room"
 	conn.Close()
