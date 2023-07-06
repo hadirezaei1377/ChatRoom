@@ -29,11 +29,11 @@ type Client struct {
 type ChatMessage struct {
 	Sender    string
 	Text      string
-	Timestamp time.Time // New field to track message timestamp
+	Timestamp time.Time
 }
 
 type UserMessage struct {
-	ID        int // Unique identifier for the message
+	ID        int
 	Sender    string
 	Content   string
 	Timestamp time.Time
@@ -47,7 +47,7 @@ type Message struct {
 var (
 	entering        = make(chan client)
 	leaving         = make(chan client)
-	messages        = make(chan string)
+	messages        = make(chan Message)
 	privateMessages = make(chan privateMessage)
 	chatmessages    = make(chan ChatMessage)
 )
@@ -57,10 +57,11 @@ type User struct {
 	Password        string
 	PrivateMessages chan privateMessage
 	IsOnline        bool
-	Messages        []UserMessage // New field to store user messages
+	Messages        []UserMessage
 }
 
 func main() {
+	users := make(map[string]User)
 
 	listener, err := net.Listen("tcp", "localhost:8080")
 	if err != nil {
@@ -74,12 +75,15 @@ func main() {
 			log.Print(err)
 			continue
 		}
-		go handleConn(conn)
+
+		go handleConn(conn, users)
 	}
 }
 
 func broadcaster() {
 	clients := make(map[client]bool)
+	users := make(map[string]User)
+
 	for {
 		select {
 		case msg := <-messages:
@@ -93,43 +97,35 @@ func broadcaster() {
 
 		case privateMsg := <-privateMessages:
 			for cli := range clients {
-				if cli.User.Username == privateMsg.Receiver {
+				if cli.username == privateMsg.Receiver || cli.username == privateMsg.Sender {
 					cli <- privateMsg.Sender + " (private): " + privateMsg.Message
-				} else if cli.User.Username == privateMsg.Sender {
-					cli <- privateMsg.Receiver + " (private): " + privateMsg.Message
 				}
 			}
 
 		case cli := <-entering:
 			clients[cli] = true
-			cli.User.IsOnline = true
+			users[cli.username] = User{Username: cli.username, IsOnline: true}
 
 		case cli := <-leaving:
 			delete(clients, cli)
 			close(cli)
-			cli.User.IsOnline = false
+			user, ok := users[cli.username]
+			if ok {
+				user.IsOnline = false
+				users[cli.username] = user
+			}
 		}
 	}
 }
 
 func formatMessage(text string) string {
 
-	// Assume Markdown-like syntax for simplicity
+	// Markdown-like syntax for simplicity
 	formattedText := text
-
-	// Apply bold formatting: *bold*
 	formattedText = strings.ReplaceAll(formattedText, "*bold*", "\033[1m"+formattedText+"\033[0m")
-
-	// Apply italic formatting: _italic_
 	formattedText = strings.ReplaceAll(formattedText, "_italic_", "\033[3m"+formattedText+"\033[0m")
-
-	// Apply underline formatting: ~underline~
 	formattedText = strings.ReplaceAll(formattedText, "~underline~", "\033[4m"+formattedText+"\033[0m")
-
-	// Apply code formatting: `code`
 	formattedText = strings.ReplaceAll(formattedText, "`code`", "\033[7m"+formattedText+"\033[0m")
-
-	// Apply multiline code formatting: ```multiline code```
 	formattedText = strings.ReplaceAll(formattedText, "```multiline code```", "\033[7m"+formattedText+"\033[0m")
 
 	return formattedText
@@ -165,12 +161,14 @@ func clientWriter(conn net.Conn, ch <-chan string, users map[string]User) {
 
 func handleConn(conn net.Conn, users map[string]User) {
 	ch := make(chan string)
+	cli := Client{conn: conn}
 	go clientWriter(conn, ch, users)
 
 	who := conn.RemoteAddr().String()
+	cli.username = who
+
 	ch <- "Welcome to the room " + who
 
-	// Prompt the user to log in or register
 	io.WriteString(conn, "Please login or register.\n")
 	io.WriteString(conn, "Enter 'login' to log in or 'register' to register.\n")
 
@@ -181,7 +179,7 @@ func handleConn(conn net.Conn, users map[string]User) {
 		text := input.Text()
 
 		if text == "login" {
-			// Prompt for username and password
+
 			io.WriteString(conn, "Enter username: ")
 			input.Scan()
 			username := input.Text()
@@ -190,7 +188,6 @@ func handleConn(conn net.Conn, users map[string]User) {
 			input.Scan()
 			password := input.Text()
 
-			// Authenticate the user
 			if authenticatedUser, ok := users[username]; ok && authenticatedUser.Password == password {
 				user = authenticatedUser
 				break
@@ -199,7 +196,7 @@ func handleConn(conn net.Conn, users map[string]User) {
 			}
 
 		} else if text == "register" {
-			// Prompt for new username and password
+
 			io.WriteString(conn, "Enter new username: ")
 			input.Scan()
 			username := input.Text()
@@ -208,7 +205,6 @@ func handleConn(conn net.Conn, users map[string]User) {
 			input.Scan()
 			password := input.Text()
 
-			// Register the user
 			users[username] = User{Username: username, Password: password}
 			user = users[username]
 			break
@@ -217,7 +213,8 @@ func handleConn(conn net.Conn, users map[string]User) {
 		}
 	}
 
-	messages <- who + " joined the room"
+	messages <- Message{Text: who + " joined the room", IsFormat: false}
+
 	entering <- ch
 
 	go func() {
@@ -231,7 +228,6 @@ func handleConn(conn net.Conn, users map[string]User) {
 	for input.Scan() {
 		text := input.Text()
 		if strings.HasPrefix(text, "/msg") {
-			// Extract receiver username and message content
 			parts := strings.SplitN(text, " ", 3)
 			if len(parts) != 3 {
 				io.WriteString(conn, "Invalid usage. Use /msg <receiver> <message>\n")
@@ -287,24 +283,26 @@ func handleConn(conn net.Conn, users map[string]User) {
 
 			if found {
 				// Update the user's messages
-				users[user.Username].Messages = userMessages
+				users[user.Username] = User{Username: user.Username, Messages: userMessages}
 
 				// Broadcast the updated/deleted message to other clients
 				if command == "/edit" {
-					messages <- user.Username + " edited message with ID " + messageIDStr
+					messages <- Message{Text: user.Username + " edited message with ID " + messageIDStr, IsFormat: false}
 				} else if command == "/delete" {
-					messages <- user.Username + " deleted message with ID " + messageIDStr
+					messages <- Message{Text: user.Username + " deleted message with ID " + messageIDStr, IsFormat: false}
+
 				}
 			} else {
 				io.WriteString(conn, "Invalid message ID or permission denied.\n")
 			}
 		} else {
-			messages <- who + ": " + text
+			messages <- Message{Text: who + ": " + text, IsFormat: false}
+
 		}
 	}
 
 	leaving <- ch
-	messages <- who + " has left the room"
+	messages <- Message{Text: who + " has left the room", IsFormat: false}
 	conn.Close()
 }
 
