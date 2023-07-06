@@ -8,19 +8,28 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 )
 
 type client chan<- string
 
 type User struct {
-	Username string
-	Password string
+	Username        string
+	Password        string
+	PrivateMessages chan privateMessage
+}
+
+type privateMessage struct {
+	Sender   string
+	Receiver string
+	Message  string
 }
 
 var (
-	entering = make(chan client)
-	leaving  = make(chan client)
-	messages = make(chan string)
+	entering        = make(chan client)
+	leaving         = make(chan client)
+	messages        = make(chan string)
+	privateMessages = make(chan privateMessage)
 )
 
 func main() {
@@ -50,6 +59,15 @@ func broadcaster() {
 				cli <- msg
 			}
 
+		case privateMsg := <-privateMessages:
+			for cli := range clients {
+				if cli.User.Username == privateMsg.Receiver {
+					cli <- privateMsg.Sender + " (private): " + privateMsg.Message
+				} else if cli.User.Username == privateMsg.Sender {
+					cli <- privateMsg.Receiver + " (private): " + privateMsg.Message
+				}
+			}
+
 		case cli := <-entering:
 			clients[cli] = true
 
@@ -61,10 +79,12 @@ func broadcaster() {
 }
 
 func clientWriter(conn net.Conn, ch <-chan string) {
-
 	for msg := range ch {
-		fmt.Fprintln(conn, msg)
-
+		if strings.Contains(msg, "(private)") {
+			fmt.Fprintln(conn, "\033[33m"+msg+"\033[0m") // Print private messages in yellow
+		} else {
+			fmt.Fprintln(conn, msg)
+		}
 	}
 }
 
@@ -125,9 +145,37 @@ func handleConn(conn net.Conn) {
 	messages <- who + " joined the room"
 	entering <- ch
 
+	go func() {
+		for privateMsg := range user.PrivateMessages {
+			if privateMsg.Receiver == user.Username {
+				ch <- privateMsg.Sender + " (private): " + privateMsg.Message
+			}
+		}
+	}()
+
 	for input.Scan() {
 		text := input.Text()
-		messages <- who + ": " + text
+		if strings.HasPrefix(text, "/msg") {
+			// Extract receiver username and message content
+			parts := strings.SplitN(text, " ", 3)
+			if len(parts) != 3 {
+				io.WriteString(conn, "Invalid usage. Use /msg <receiver> <message>\n")
+				continue
+			}
+
+			receiver := parts[1]
+			message := parts[2]
+
+			// Send private message
+			privateMsg := privateMessage{
+				Sender:   who,
+				Receiver: receiver,
+				Message:  message,
+			}
+			privateMessages <- privateMsg
+		} else {
+			messages <- who + ": " + text
+		}
 	}
 
 	leaving <- ch
