@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type client chan<- string
@@ -25,8 +27,16 @@ type Client struct {
 }
 
 type ChatMessage struct {
-	Sender string
-	Text   string
+	Sender    string
+	Text      string
+	Timestamp time.Time // New field to track message timestamp
+}
+
+type UserMessage struct {
+	ID        int // Unique identifier for the message
+	Sender    string
+	Content   string
+	Timestamp time.Time
 }
 
 type Message struct {
@@ -46,7 +56,8 @@ type User struct {
 	Username        string
 	Password        string
 	PrivateMessages chan privateMessage
-	IsOnline        bool // New field to track online/offline status
+	IsOnline        bool
+	Messages        []UserMessage // New field to store user messages
 }
 
 func main() {
@@ -237,6 +248,56 @@ func handleConn(conn net.Conn, users map[string]User) {
 				Message:  message,
 			}
 			privateMessages <- privateMsg
+		} else if strings.HasPrefix(text, "/edit") || strings.HasPrefix(text, "/delete") {
+			parts := strings.SplitN(text, " ", 3)
+			if len(parts) != 3 {
+				io.WriteString(conn, "Invalid usage. Use /edit <message_id> <new_content> or /delete <message_id>\n")
+				continue
+			}
+
+			command := parts[0]
+			messageIDStr := parts[1]
+			newContent := parts[2]
+
+			messageID, err := strconv.Atoi(messageIDStr)
+			if err != nil {
+				io.WriteString(conn, "Invalid message ID. Please provide a valid integer.\n")
+				continue
+			}
+
+			userMessages := user.Messages
+			found := false
+
+			for i, msg := range userMessages {
+				if msg.ID == messageID && msg.Sender == user.Username {
+					found = true
+
+					if command == "/edit" {
+						// Update the message content
+						userMessages[i].Content = newContent
+						userMessages[i].Timestamp = time.Now()
+						break
+					} else if command == "/delete" {
+						// Remove the message from the user's messages
+						userMessages = append(userMessages[:i], userMessages[i+1:]...)
+						break
+					}
+				}
+			}
+
+			if found {
+				// Update the user's messages
+				users[user.Username].Messages = userMessages
+
+				// Broadcast the updated/deleted message to other clients
+				if command == "/edit" {
+					messages <- user.Username + " edited message with ID " + messageIDStr
+				} else if command == "/delete" {
+					messages <- user.Username + " deleted message with ID " + messageIDStr
+				}
+			} else {
+				io.WriteString(conn, "Invalid message ID or permission denied.\n")
+			}
 		} else {
 			messages <- who + ": " + text
 		}
