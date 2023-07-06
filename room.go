@@ -25,6 +25,11 @@ type privateMessage struct {
 	Message  string
 }
 
+type Message struct {
+	Text     string
+	IsFormat bool
+}
+
 var (
 	entering        = make(chan client)
 	leaving         = make(chan client)
@@ -56,7 +61,11 @@ func broadcaster() {
 		select {
 		case msg := <-messages:
 			for cli := range clients {
-				cli <- msg
+				if msg.IsFormat {
+					cli <- formatMessage(msg.Text)
+				} else {
+					cli <- msg.Text
+				}
 			}
 
 		case privateMsg := <-privateMessages:
@@ -78,10 +87,36 @@ func broadcaster() {
 	}
 }
 
+func formatMessage(text string) string {
+
+	// Assume Markdown-like syntax for simplicity
+	formattedText := text
+
+	// Apply bold formatting: *bold*
+	formattedText = strings.ReplaceAll(formattedText, "*bold*", "\033[1m"+formattedText+"\033[0m")
+
+	// Apply italic formatting: _italic_
+	formattedText = strings.ReplaceAll(formattedText, "_italic_", "\033[3m"+formattedText+"\033[0m")
+
+	// Apply underline formatting: ~underline~
+	formattedText = strings.ReplaceAll(formattedText, "~underline~", "\033[4m"+formattedText+"\033[0m")
+
+	// Apply code formatting: `code`
+	formattedText = strings.ReplaceAll(formattedText, "`code`", "\033[7m"+formattedText+"\033[0m")
+
+	// Apply multiline code formatting: ```multiline code```
+	formattedText = strings.ReplaceAll(formattedText, "```multiline code```", "\033[7m"+formattedText+"\033[0m")
+
+	return formattedText
+}
+
 func clientWriter(conn net.Conn, ch <-chan string) {
 	for msg := range ch {
 		if strings.Contains(msg, "(private)") {
 			fmt.Fprintln(conn, "\033[33m"+msg+"\033[0m") // Print private messages in yellow
+		} else if strings.HasPrefix(msg, "/format ") {
+			text := msg[len("/format "):]
+			messages <- Message{Text: text, IsFormat: true}
 		} else {
 			fmt.Fprintln(conn, msg)
 		}
