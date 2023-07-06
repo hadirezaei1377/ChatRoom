@@ -13,16 +13,20 @@ import (
 
 type client chan<- string
 
-type User struct {
-	Username        string
-	Password        string
-	PrivateMessages chan privateMessage
-}
-
 type privateMessage struct {
 	Sender   string
 	Receiver string
 	Message  string
+}
+
+type Client struct {
+	conn     net.Conn
+	username string
+}
+
+type ChatMessage struct {
+	Sender string
+	Text   string
 }
 
 type Message struct {
@@ -35,7 +39,15 @@ var (
 	leaving         = make(chan client)
 	messages        = make(chan string)
 	privateMessages = make(chan privateMessage)
+	chatmessages    = make(chan ChatMessage)
 )
+
+type User struct {
+	Username        string
+	Password        string
+	PrivateMessages chan privateMessage
+	IsOnline        bool // New field to track online/offline status
+}
 
 func main() {
 
@@ -79,10 +91,12 @@ func broadcaster() {
 
 		case cli := <-entering:
 			clients[cli] = true
+			cli.User.IsOnline = true
 
 		case cli := <-leaving:
 			delete(clients, cli)
 			close(cli)
+			cli.User.IsOnline = false
 		}
 	}
 }
@@ -110,7 +124,7 @@ func formatMessage(text string) string {
 	return formattedText
 }
 
-func clientWriter(conn net.Conn, ch <-chan string) {
+func clientWriter(conn net.Conn, ch <-chan string, users map[string]User) {
 	for msg := range ch {
 		if strings.Contains(msg, "(private)") {
 			fmt.Fprintln(conn, "\033[33m"+msg+"\033[0m") // Print private messages in yellow
@@ -118,14 +132,29 @@ func clientWriter(conn net.Conn, ch <-chan string) {
 			text := msg[len("/format "):]
 			messages <- Message{Text: text, IsFormat: true}
 		} else {
-			fmt.Fprintln(conn, msg)
+			parts := strings.SplitN(msg, ": ", 2)
+			if len(parts) == 2 {
+				username := parts[0]
+				message := parts[1]
+
+				user, ok := users[username]
+				if !ok || !user.IsOnline {
+					// Display offline user with a red dot
+					fmt.Fprintln(conn, "\033[31m●\033[0m "+msg)
+				} else {
+					// Display online user with a green dot
+					fmt.Fprintln(conn, "\033[32m●\033[0m "+msg)
+				}
+			} else {
+				fmt.Fprintln(conn, msg)
+			}
 		}
 	}
 }
 
-func handleConn(conn net.Conn) {
+func handleConn(conn net.Conn, users map[string]User) {
 	ch := make(chan string)
-	go clientWriter(conn, ch)
+	go clientWriter(conn, ch, users)
 
 	who := conn.RemoteAddr().String()
 	ch <- "Welcome to the room " + who
@@ -151,8 +180,8 @@ func handleConn(conn net.Conn) {
 			password := input.Text()
 
 			// Authenticate the user
-			if authenticateUser(username, password) {
-				user = User{Username: username, Password: password}
+			if authenticatedUser, ok := users[username]; ok && authenticatedUser.Password == password {
+				user = authenticatedUser
 				break
 			} else {
 				io.WriteString(conn, "Invalid username or password. Please try again.\n")
@@ -169,8 +198,8 @@ func handleConn(conn net.Conn) {
 			password := input.Text()
 
 			// Register the user
-			registerUser(username, password)
-			user = User{Username: username, Password: password}
+			users[username] = User{Username: username, Password: password}
+			user = users[username]
 			break
 		} else {
 			io.WriteString(conn, "Invalid command. Please enter 'login' or 'register'.\n")
