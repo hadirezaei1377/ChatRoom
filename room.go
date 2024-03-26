@@ -4,6 +4,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +26,7 @@ type privateMessage struct {
 type Client struct {
 	conn     net.Conn
 	username string
+	id       string // random ID for people who want to have anonymous chat to eachothers
 }
 
 type ChatMessage struct {
@@ -162,6 +165,8 @@ func clientWriter(conn net.Conn, ch <-chan string, users map[string]User) {
 func handleConn(conn net.Conn, users map[string]User) {
 	ch := make(chan string)
 	cli := Client{conn: conn}
+
+	cli.id = generateID()
 	go clientWriter(conn, ch, users)
 
 	who := conn.RemoteAddr().String()
@@ -304,6 +309,15 @@ func handleConn(conn net.Conn, users map[string]User) {
 	leaving <- ch
 	messages <- Message{Text: who + " has left the room", IsFormat: false}
 	conn.Close()
+}
+
+func generateID() string {
+	b := make([]byte, 4)
+	_, err := rand.Read(b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return hex.EncodeToString(b)
 }
 
 var registeredUsers = make(map[string]string)
