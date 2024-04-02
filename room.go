@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dchest/captcha"
 )
 
 type client chan<- string
@@ -309,6 +311,19 @@ func handleConn(conn net.Conn, users map[string]User) {
 	leaving <- ch
 	messages <- Message{Text: who + " has left the room", IsFormat: false}
 	conn.Close()
+
+	captchaID := captcha.New()
+
+	io.WriteString(conn, "Please enter the CAPTCHA: "+captchaID+"\n")
+
+	input.Scan()
+	captchaInput := input.Text()
+	if captcha.VerifyString(captchaID, captchaInput) {
+
+	} else {
+
+	}
+
 }
 
 func generateID() string {
